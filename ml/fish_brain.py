@@ -14,7 +14,7 @@ def tanh(x):
 
 
 class FishBrain:
-    def __init__(self, weights: list[float] | None = None):
+    def __init__(self, weights = None):
         n_w1 = INPUT_SIZE * HIDDEN_SIZE
         n_b1 = HIDDEN_SIZE
         n_w2 = HIDDEN_SIZE * OUTPUT_SIZE
@@ -34,24 +34,24 @@ class FishBrain:
         i += n_w2
         self.b2 = w[i: i + n_b2]
 
-    def forward(self, inputs: list[float]) -> tuple[float, float]:
+    def forward(self, inputs):
         x = np.array(inputs, dtype=np.float32)
         x = tanh(x @ self.W1 + self.b1)
         x = tanh(x @ self.W2 + self.b2)
         return float(x[0]), float(x[1])
 
-    def get_weights(self) -> list[float]:
+    def get_weights(self):
         return np.concatenate([
             self.W1.flatten(), self.b1,
             self.W2.flatten(), self.b2,
         ]).tolist()
 
-    def save(self, path: str) -> None:
+    def save(self, path):
         with open(path, 'w') as f:
             json.dump({'weights': self.get_weights()}, f)
 
     @classmethod
-    def load(cls, path: str) -> 'FishBrain':
+    def load(cls, path):
         with open(path) as f:
             data = json.load(f)
         return cls(data['weights'])
@@ -59,8 +59,8 @@ class FishBrain:
 
 SPEED_MAX = 0.8
 
-POP_SIZE = 100
-GENERATIONS = 1800
+POP_SIZE = 80
+GENERATIONS = 900
 ELITE_FRACTION = 0.2
 MUTATION_RATE = 0.15
 MUTATION_STD = 0.3
@@ -77,7 +77,7 @@ def _make_fish(x=None, y=None):
     }
 
 
-def _build_inputs(fish: dict, angry_list: list[dict]) -> list[float]:
+def _build_inputs(fish, angry_list):
     if angry_list:
         dists = [(math.hypot(fish['x'] - a['x'], fish['y'] - a['y']), a)
                  for a in angry_list]
@@ -100,7 +100,7 @@ def _build_inputs(fish: dict, angry_list: list[dict]) -> list[float]:
     ]
 
 
-def _simulate(brain: FishBrain) -> float:
+def _simulate(brain):
     n_peaceful = 3
     n_angry = 2
     peaceful = [_make_fish() for _ in range(n_peaceful)]
@@ -132,12 +132,10 @@ def _simulate(brain: FishBrain) -> float:
 
         still_alive = []
         for p in peaceful:
-            hit = False
             for a in angry:
                 if math.hypot(p['x'] - a['x'], p['y'] - a['y']) <= TOUCH_R:
                     p['hp'] -= 25
                     fitness -= 50
-                    hit = True
                     break
             if p['hp'] > 0:
                 if angry:
@@ -155,19 +153,19 @@ def _simulate(brain: FishBrain) -> float:
     return fitness
 
 
-def _mutate(weights: list[float]) -> list[float]:
+def _mutate(weights):
     return [
         w + random.gauss(0, MUTATION_STD) if random.random() < MUTATION_RATE else w
         for w in weights
     ]
 
 
-def _crossover(a: list[float], b: list[float]) -> list[float]:
+def _crossover(a, b):
     cut = random.randint(0, len(a))
     return a[:cut] + b[cut:]
 
 
-def train(save_path: str = 'ml/brain.json') -> FishBrain:
+def train(save_path = 'ml/brain.json'):
     print(f'Training: pop={POP_SIZE}, generations={GENERATIONS}')
     population = [FishBrain() for _ in range(POP_SIZE)]
 

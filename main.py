@@ -16,15 +16,15 @@ from data.user import User
 from ml.fish_brain import FishBrain
 
 _BRAIN_PATH = path.join('ml', 'brain.json')
-_brain: FishBrain | None = None
+fish_brain: FishBrain | None = None
 if os.path.exists(_BRAIN_PATH):
-    _brain = FishBrain.load(_BRAIN_PATH)
+    fish_brain = FishBrain.load(_BRAIN_PATH)
     print(f'Loading brain.json')
 else:
     print('No brain.json. Run ml/train.py first.')
 
 
-def _build_inputs(fish, angry_list) -> list[float]:
+def calc_movement(fish, angry_list):
     if angry_list:
         dists = [(math.hypot(fish.x - a.x, fish.y - a.y), a) for a in angry_list]
         d, nearest = min(dists, key=lambda t: t[0])
@@ -57,7 +57,16 @@ def index():
 
 @app.route('/<path:path>')
 def static_proxy(path):
-    return send_from_directory(app.static_folder, path)
+    file_path = os.path.join(app.static_folder, path)
+    if os.path.isfile(file_path):
+        return send_from_directory(app.static_folder, path)
+    else:
+        return send_from_directory(app.static_folder, 'index.html')
+
+
+@app.errorhandler(404)
+def not_found(e):
+    return send_from_directory(app.static_folder, 'index.html')
 
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
@@ -66,23 +75,29 @@ CORS(app)
 socketio = SocketIO(app, cors_allowed_origins='*')
 
 TICK_INTERVAL = 0.1
-SPEED_BASE = 0.4
-SPEED_HUNT = 0.65
-SPEED_FLEE = 0.60
+SPEED_BASE = 0.5
+SPEED_HUNT = 0.7
+SPEED_FLEE = 0.6
 HUNT_RADIUS = 30.0
-FLEE_RADIUS = 35.0
+FLEE_RADIUS = 31.0
 TOUCH_RADIUS = 2.5
 HIT_DAMAGE = 25.0
 STARVATION_TICKS = 100
 STARVATION_DAMAGE = 10.0
-SPEED_MIN, SPEED_MAX = 0.2, 0.8
+SPEED_MIN, SPEED_MAX = 0.2, 0.9
+
+FISH_RADIUS = 2.0
+
+COLLISION_PUSH = 0.8
+
+STUCK_THRESHOLD = 0.5
 
 
-def allowed_file(filename: str) -> bool:
+def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def serialize_fish(fish: Fish) -> dict:
+def serialize_fish(fish: Fish):
     return {
         'id': fish.id,
         'name': fish.name,
@@ -108,21 +123,21 @@ def dist(a: Fish, b: Fish) -> float:
     return math.hypot(a.x - b.x, a.y - b.y)
 
 
-def move_toward(fish: Fish, tx: float, ty: float, speed: float) -> None:
+def move_toward(fish: Fish, tx, ty, speed):
     dx, dy = tx - fish.x, ty - fish.y
-    d = math.hypot(dx, dy) or 1e-9
+    d = math.hypot(dx, dy) or 0.01
     fish.vx = (dx / d) * speed
     fish.vy = (dy / d) * speed
 
 
-def move_away(fish: Fish, tx: float, ty: float, speed: float) -> None:
+def move_away(fish: Fish, tx, ty, speed):
     dx, dy = fish.x - tx, fish.y - ty
-    d = math.hypot(dx, dy) or 1e-9
+    d = math.hypot(dx, dy) or 0.01
     fish.vx = (dx / d) * speed
     fish.vy = (dy / d) * speed
 
 
-def bounce(fish: Fish) -> None:
+def bounce(fish: Fish):
     fish.x = max(0.0, min(100.0, fish.x))
     fish.y = max(0.0, min(100.0, fish.y))
 
@@ -135,6 +150,56 @@ def bounce(fish: Fish) -> None:
         fish.vy = abs(fish.vy) or SPEED_BASE
     elif fish.y >= 100:
         fish.vy = -(abs(fish.vy) or SPEED_BASE)
+
+
+def resolve_collisions(alive: list) -> None:
+    """
+    Elastic-style collision resolution.
+
+    For every overlapping pair:
+      1. Push their positions apart so they no longer overlap (positional correction).
+      2. Reflect the velocity components along the collision normal (elastic bounce).
+      3. If they are still overlapping after the push (stuck), give both a strong
+         random kick so they can never freeze in place.
+    """
+    diameter = FISH_RADIUS * 2
+
+    for i in range(len(alive)):
+        for j in range(i + 1, len(alive)):
+            a, b = alive[i], alive[j]
+
+            dx = b.x - a.x
+            dy = b.y - a.y
+            d = math.hypot(dx, dy) or 1e-9
+
+            if d >= diameter:
+                continue
+
+            overlap = diameter - d
+            nx, ny = dx / d, dy / d
+
+            correction = (overlap / 2) * COLLISION_PUSH
+            a.x -= nx * correction
+            a.y -= ny * correction
+            b.x += nx * correction
+            b.y += ny * correction
+
+            a_along = a.vx * nx + a.vy * ny
+            b_along = b.vx * nx + b.vy * ny
+
+            if a_along - b_along > 0:
+                a.vx -= (a_along - b_along) * nx
+                a.vy -= (a_along - b_along) * ny
+                b.vx += (a_along - b_along) * nx
+                b.vy += (a_along - b_along) * ny
+
+            if math.hypot(b.x - a.x, b.y - a.y) < STUCK_THRESHOLD:
+                kick = SPEED_MAX * 1.5
+                angle = random.uniform(0, 2 * math.pi)
+                a.vx = -math.cos(angle) * kick
+                a.vy = -math.sin(angle) * kick
+                b.vx = math.cos(angle) * kick
+                b.vy = math.sin(angle) * kick
 
 
 def movement_loop():
@@ -165,8 +230,6 @@ def movement_loop():
                         a.ticks_since_kill = 0
                         if target.health <= 0:
                             dead_ids.append(target.id)
-                else:
-                    pass
 
                 if a.ticks_since_kill >= STARVATION_TICKS:
                     a.health -= STARVATION_DAMAGE
@@ -180,10 +243,9 @@ def movement_loop():
 
                 threat = next(iter(sorted(angry, key=lambda a: dist(p, a))), None)
 
-                if _brain and (not threat or dist(p, threat) <= FLEE_RADIUS):
-                    inputs = _build_inputs(p, angry)
-                    dvx, dvy = _brain.forward(inputs)
-
+                if fish_brain and (not threat or dist(p, threat) <= FLEE_RADIUS):
+                    inputs = calc_movement(p, angry)
+                    dvx, dvy = fish_brain.forward(inputs)
                     p.vx = 0.7 * p.vx + 0.3 * dvx * SPEED_MAX
                     p.vy = 0.7 * p.vy + 0.3 * dvy * SPEED_MAX
                 else:
@@ -199,6 +261,12 @@ def movement_loop():
                     f.x += f.vx
                     f.y += f.vy
                     bounce(f)
+
+            alive = [f for f in fishes if f.id not in dead_ids]
+            resolve_collisions(alive)
+
+            for f in alive:
+                bounce(f)
 
             if dead_ids:
                 for fid in set(dead_ids):
@@ -218,7 +286,7 @@ def movement_loop():
             socketio.emit('fishes_updated', get_all_fishes())
 
 
-def check_credentials() -> tuple[bool, str]:
+def check_credentials():
     username = request.form.get('username', '').strip()
     password = request.form.get('password', '')
 
@@ -331,6 +399,26 @@ def login_user():
 @app.route('/uploads/<path:filename>')
 def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+
+@app.route('/stats/', methods=['GET'])
+def stats():
+    return jsonify({
+        'TICK_INTERVAL': TICK_INTERVAL,
+        'SPEED_BASE': SPEED_BASE,
+        'SPEED_HUNT': SPEED_HUNT,
+        'SPEED_FLEE': SPEED_FLEE,
+        'HUNT_RADIUS': HUNT_RADIUS,
+        'FLEE_RADIUS': FLEE_RADIUS,
+        'TOUCH_RADIUS': TOUCH_RADIUS,
+        'HIT_DAMAGE': HIT_DAMAGE,
+        'STARVATION_TICKS': STARVATION_TICKS,
+        'STARVATION_DAMAGE': STARVATION_DAMAGE,
+        'SPEED_MIN': SPEED_MIN,
+        'SPEED_MAX': SPEED_MAX,
+        'FISH_RADIUS': FISH_RADIUS,
+        'COLLISION_PUSH': COLLISION_PUSH,
+    })
 
 
 @socketio.on('connect')
