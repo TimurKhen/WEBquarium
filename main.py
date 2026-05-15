@@ -14,6 +14,8 @@ from data import db_session
 from data.fish import Fish
 from data.user import User
 from ml.fish_brain import FishBrain
+import os
+from dotenv import load_dotenv
 
 _BRAIN_PATH = path.join('ml', 'brain.json')
 fish_brain: FishBrain | None = None
@@ -44,8 +46,10 @@ def calc_movement(fish, angry_list):
     ]
 
 
+load_dotenv()
+
 app = Flask(__name__, static_folder='dist/WEBquarium/browser', static_url_path='')
-app.config['SECRET_KEY'] = 'yandexlyceum_secret_key'
+app.config['SECRET_KEY'] = os.getenv("API_KEY")
 app.config['UPLOAD_FOLDER'] = path.join('static', 'uploads')
 makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
@@ -111,7 +115,7 @@ def serialize_fish(fish: Fish):
     }
 
 
-def get_all_fishes() -> list:
+def get_all_fishes():
     session = db_session.create_session()
     try:
         return [serialize_fish(f) for f in session.query(Fish).all()]
