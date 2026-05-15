@@ -152,16 +152,7 @@ def bounce(fish: Fish):
         fish.vy = -(abs(fish.vy) or SPEED_BASE)
 
 
-def resolve_collisions(alive: list) -> None:
-    """
-    Elastic-style collision resolution.
-
-    For every overlapping pair:
-      1. Push their positions apart so they no longer overlap (positional correction).
-      2. Reflect the velocity components along the collision normal (elastic bounce).
-      3. If they are still overlapping after the push (stuck), give both a strong
-         random kick so they can never freeze in place.
-    """
+def resolve_collisions(alive: list):
     diameter = FISH_RADIUS * 2
 
     for i in range(len(alive)):
